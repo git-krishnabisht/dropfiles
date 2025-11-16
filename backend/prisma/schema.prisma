@@ -21,18 +21,29 @@ enum ChunkStatus {
 }
 
 model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String?
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  sessions Session[]      @relation("UserSessions")
+  files    FileMetadata[] @relation("UserFiles")
+
+  @@map("user")
+}
+
+model Session {
   id               String   @id @default(uuid())
-  email            String   @unique
-  name             String?
-  refreshTokenHash String
-  rtAssignmentDate DateTime
-  rtExpiresAt      DateTime
-  passwordHash     String   @map("password_hash")
+  userId           String   @map("user_id")
+  refreshTokenHash String   @map("rt_hash")
+  deviceId         String   @unique @map("device_id")
   createdAt        DateTime @default(now()) @map("created_at")
+  expiresAt        DateTime @map("expires_at")
 
-  files FileMetadata[] @relation("UserFiles")
+  user User @relation(fields: [userId], references: [id], name: "UserSessions")
 
-  @@map("users")
+  @@map("sessions")
 }
 
 model FileMetadata {
@@ -40,7 +51,7 @@ model FileMetadata {
   fileName String     @map("file_name")
   mimeType String     @map("mime_type")
   size     Int?
-  s3Key    String     @unique @map("s3_key")
+  s3Key    String     @map("s3_key")
   status   FileStatus @default(UPLOADING)
   userId   String     @map("user_id")
 

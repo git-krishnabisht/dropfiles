@@ -5,10 +5,9 @@ import logger from "../utils/logger.util.js";
 import { ValidationUtil } from "../utils/validate.util.js";
 
 export class jwtService {
-  static async assign(payload: jwtPayload) {
+  static async assign(payload: jwtPayload, ttl: number) {
     logger.info("Generating JWT token", {
       email: payload.email,
-      name: payload.name,
     });
 
     const jwt_validate = ValidationUtil.validateJWTPayload(payload);
@@ -22,7 +21,7 @@ export class jwtService {
 
     const token = jwt.sign(payload, config.jwt.privateKey, {
       algorithm: "RS256",
-      expiresIn: "15m",
+      expiresIn: ttl,
     });
 
     return token;

@@ -38,9 +38,6 @@ export class ValidationUtil {
       missing.push("email");
     }
 
-    if (!payload.name || payload.name.trim() === "") {
-      missing.push("name");
-    }
     return missing.join(", ");
   }
 }

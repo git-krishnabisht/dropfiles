@@ -5,6 +5,13 @@ import { sts } from "../../types/common.types";
 import { jwtService } from "../../shared/services/jwt.service";
 import { AuthUtils } from "../../shared/utils/auth.util";
 import { ValidationUtil } from "../../shared/utils/validate.util";
+import { PrismaUtil } from "../../shared/utils/prisma.util";
+import crypto, { randomUUID } from "crypto";
+
+// TTLs in ms
+const RT_TTL = 15 * 24 * 60 * 60 * 1000; // 15 days
+const AT_TTL = 15 * 60 * 1000; // 15 minutes
+const DEVICE_ID_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 export class authController {
   static async sign_up(req: Request, res: Response) {
@@ -28,11 +35,7 @@ export class authController {
       user: req.body.user.email,
     });
 
-    const user_exits = await prisma.user.findUnique({
-      where: { email: user.email },
-      select: { id: true },
-    });
-
+    const user_exits = await PrismaUtil.userExists(user.email);
     if (user_exits) {
       logger.info("User already exists in the DB", {
         user: req.body.user,
@@ -40,125 +43,239 @@ export class authController {
       return res.status(409).json({ error: "User already exists in the DB" }); // 409 - conflit
     }
 
-    const hash = await AuthUtils.hashPassword(user.password);
+    const access_token = await jwtService.assign(
+      {
+        email: user.email,
+      },
+      AT_TTL / 1000
+    );
 
-    logger.info("Creating user record in the DB", {
+    if (!access_token) {
+      logger.error("Missing access token");
+      return res.status(401).json({
+        error: "Missing access token",
+      });
+    }
+
+    const password_hash = await AuthUtils.generateHash(user.password);
+    const created_user = await PrismaUtil.createUser(
+      user.email,
+      user.name,
+      password_hash
+    );
+
+    logger.info("Created user record in the DB", {
       user: req.body.user.email,
     });
 
-    await prisma.user.create({
-      data: {
-        email: user.email,
-        name: user.name,
-        passwordHash: hash,
-      },
-    });
+    const refresh_token = crypto.randomBytes(64).toString("hex");
+    const refresh_token_hash = await AuthUtils.generateHash(refresh_token);
+    const exp = new Date(Date.now() + RT_TTL);
+    const device_id = randomUUID();
 
-    const token = await jwtService.assign({
-      email: user.email,
-      name: user.name,
-    });
-
-    if (!token) {
-      logger.error("Missing JWT token");
-      return res.status(401).json({
-        error: "Missing JWT token",
-      });
-    }
+    await PrismaUtil.createSession(
+      created_user.id,
+      refresh_token_hash,
+      device_id,
+      exp
+    );
 
     logger.info("User registered successfully", {
       user: req.body.user.email,
     });
 
-    res.cookie("access_token", token, {
+    res.cookie("device_id", device_id, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
-      maxAge: 15 * 60 * 1000,
+      maxAge: DEVICE_ID_TTL,
+    });
+
+    res.cookie("access_token", access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: AT_TTL,
+    });
+
+    res.cookie("refresh_token", refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: RT_TTL,
     });
 
     return res.status(200).json({ status: "User has registered successfully" });
   }
 
   static async sign_in(req: Request, res: Response) {
-    logger.info("Sign in has started", {
-      user: req.body.user,
-    });
-
     const { user } = req.body;
 
     const user_validate = ValidationUtil.validateAuthBody(user, sts.SIGNIN);
     if (user_validate.length > 0) {
-      logger.info("Missing required fields in SignIn request", {
-        fields: user_validate,
-      });
-      return res
-        .status(400)
-        .json({ error: `Missing required fields: ${user_validate}` });
-    }
-
-    logger.info("Querying User from the DB", {
-      user: req.body.user.email,
-    });
-
-    const u = await prisma.user.findUnique({
-      where: { email: user.email },
-      select: { passwordHash: true, email: true, name: true },
-    });
-
-    if (!u) {
-      logger.info("Invalid Credentials, User does not exits in the DB", {
-        user: req.body.user.email,
-      });
+      logger.info(`Missing required fields: ${user_validate}`);
       return res.status(401).json({
-        error:
-          "Invalid Credentials, User does not exits in the DB, You need to SignUp first",
+        error: `Missing required fields: ${user_validate}`,
       });
     }
 
-    const is_valid = await AuthUtils.hashCompare(
-      user.password,
-      u.passwordHash as string
+    const password_hash = await PrismaUtil.getPasswordHash(user.email);
+    if (!password_hash) {
+      logger.info(
+        `User ${user.email} doesn't exists in the DB, You need to sign in first`
+      );
+      return res.status(404).json({
+        error: `User ${user.email} doesn't exists in the DB, You need to sign in first`,
+      });
+    }
+
+    const valid_hash = AuthUtils.compareHash(user.password, password_hash);
+    if (!valid_hash) {
+      logger.info(`Invalid Password`);
+      return res.status(401).json({
+        error: `Invalid Password`,
+      });
+    }
+
+    let device_id = req.cookies.device_id;
+    if (!device_id) {
+      device_id = randomUUID();
+    }
+
+    const user_id = await PrismaUtil.getUserId(user.email);
+
+    const session = await PrismaUtil.getSessionByDevice(device_id);
+    if (session && session.userId === user_id) {
+      await PrismaUtil.deleteSession(device_id);
+    }
+
+    const refresh_token = crypto.randomBytes(64).toString("hex");
+    const refresh_token_hash = await AuthUtils.generateHash(refresh_token);
+    const exp = new Date(Date.now() + RT_TTL);
+    await PrismaUtil.createSession(
+      user_id!,
+      refresh_token_hash,
+      device_id,
+      exp
     );
 
-    if (!is_valid) {
-      logger.info("Invalid Password", {
-        user: req.body.user.email,
-      });
-      return res.status(401).json({
-        error: "Invalid Password",
-      });
-    }
+    const access_token = await jwtService.assign(
+      {
+        email: user.email,
+      },
+      AT_TTL / 1000
+    );
 
-    logger.info("Assigning JWT token", {
-      user: req.body.user.email,
-    });
+    logger.info(`User ${user.email} has Signed In Successfully`);
 
-    const token = await jwtService.assign({
-      email: u.email,
-      name: u.name as string,
-    });
-
-    if (!token) {
-      logger.error("Missing JWT token");
-      return res.status(401).json({
-        error: "Missing JWT token",
-      });
-    }
-
-    logger.info("User logged in successfully", {
-      user: req.body.user.email,
-    });
-
-    res.cookie("access_token", token, {
+    res.cookie("access_token", access_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
-      maxAge: 15 * 60 * 1000,
+      maxAge: AT_TTL,
     });
 
-    return res.status(200).json({ status: "User logged in successfully" });
+    res.cookie("refresh_token", refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: RT_TTL,
+    });
+
+    res.cookie("device_id", device_id, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: DEVICE_ID_TTL,
+    });
+
+    return res.status(200).json({
+      status: `User ${user.email} has Signed In Successfully`,
+    });
   }
 
-  static async refresh_token() {}
+  static async refresh_token(req: Request, res: Response) {
+    const refresh_token = req.cookies.refresh_token;
+    const device_id = req.cookies.device_id;
+
+    if (!refresh_token || !device_id)
+      return res
+        .status(401)
+        .json({ error: "Refresh Token or Device ID is Invalid" });
+
+    const session = await prisma.session.findUnique({
+      where: { deviceId: device_id },
+      select: { user: true, refreshTokenHash: true },
+    });
+    if (!session)
+      return res
+        .status(401)
+        .json({ error: "No Session available with this Device ID" });
+
+    const valid_rt = await AuthUtils.compareHash(
+      refresh_token,
+      session.refreshTokenHash
+    );
+    if (!valid_rt) {
+      await prisma.session.delete({ where: { deviceId: device_id } });
+      return res.status(401).json({ error: "Invalid Refresh Token" });
+    }
+
+    const user = session.user;
+
+    const new_access_token = await jwtService.assign(
+      {
+        email: user.email,
+      },
+      AT_TTL / 1000
+    );
+    const new_refresh_token = crypto.randomBytes(64).toString("hex");
+    const new_refresh_token_hash = await AuthUtils.generateHash(
+      new_refresh_token
+    );
+    const exp = new Date(Date.now() + RT_TTL);
+
+    await prisma.session.update({
+      where: { deviceId: device_id },
+      data: { refreshTokenHash: new_refresh_token_hash, expiresAt: exp },
+    });
+
+    res.cookie("access_token", new_access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: AT_TTL,
+    });
+
+    res.cookie("refresh_token", new_refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: RT_TTL,
+    });
+
+    return res.status(200).json({
+      status: "Token refreshed successfully",
+    });
+  }
+
+  static async sign_out(req: Request, res: Response) {
+    const device_id = req.cookies.device_id;
+    if (!device_id) {
+      res.clearCookie("access_token");
+      res.clearCookie("refresh_token");
+      res.clearCookie("device_id");
+
+      return res.status(200).json({
+        status: "Signed Out",
+      });
+    }
+
+    await PrismaUtil.deleteSession(device_id);
+    res.clearCookie("access_token");
+    res.clearCookie("refresh_token");
+    res.clearCookie("device_id");
+
+    return res.status(200).json({ status: "Signed out" });
+  }
 }

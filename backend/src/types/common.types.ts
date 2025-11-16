@@ -1,6 +1,5 @@
 export interface jwtPayload {
   email: string;
-  name: string;
 }
 
 export interface User {

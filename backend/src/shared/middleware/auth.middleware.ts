@@ -4,7 +4,7 @@ import logger from "../utils/logger.util.js";
 import { ValidationUtil } from "../utils/validate.util.js";
 import { PrismaUtil } from "../utils/prisma.util.js";
 
-export const authenticateToken = async (
+export const protected_route = async (
   req: Request,
   res: Response,
   next: NextFunction
@@ -20,16 +20,18 @@ export const authenticateToken = async (
     const decoded = await jwtService.verify(token);
 
     const jwt_validate = ValidationUtil.validateJWTPayload(decoded);
-    if (jwt_validate.length > 0) {
-      throw new Error(`Missinig data in the access token ${jwt_validate}`);
-    }
 
-    await PrismaUtil.userExists(decoded.email);
+    if (jwt_validate.length > 0)
+      throw new Error(`Missinig data in the access token ${jwt_validate}`);
+
+    const userExists = await PrismaUtil.userExists(decoded.email);
+
+    if (!userExists) return next("Unauthorized: User doesn't exist in DB");
 
     req.jwtPayload = decoded;
 
     next();
   } catch (err) {
-    next(`Unauathroized: ${err}`);
+    return next(`Unauthorized: ${err}`);
   }
 };

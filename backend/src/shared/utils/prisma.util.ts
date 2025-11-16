@@ -3,99 +3,176 @@ import logger from "./logger.util";
 import { FileStatus, ChunkStatus } from "@prisma/client";
 
 export class PrismaUtil {
+  // USER
   static async userExists(email: string) {
     const user = await prisma.user.findUnique({
-      where: { email: email },
-      select: { id: true, name: true, email: true, passwordHash: true },
+      where: { email },
+      select: { id: true },
     });
-
-    if (!user) throw new Error("Missing user in DB");
-
-    return user;
+    return !!user;
   }
 
-  static async deleteFileMetadata(id: string) {
-    await prisma.fileMetadata.delete({
-      where: {
-        fileId: id,
+  static async getUserId(email: string) {
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
+    return user?.id;
+  }
+
+  static async getPasswordHash(email: string) {
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: { passwordHash: true },
+    });
+
+    if (!user?.passwordHash) {
+      throw new Error("Password hash missing in DB");
+    }
+
+    return user.passwordHash;
+  }
+
+  static async createUser(email: string, name: string, passwordHash: string) {
+    return prisma.user.create({
+      data: {
+        email,
+        name,
+        passwordHash,
+      },
+      select: { id: true },
+    });
+  }
+
+  // SESSION (REFRESH TOKEN STORAGE)
+  static async sessionExists(deviceId: string) {
+    const session = await prisma.session.findFirst({
+      where: { deviceId },
+    });
+    return !!session;
+  }
+
+  static async getSessionByDevice(deviceId: string) {
+    return prisma.session.findUnique({
+      where: { deviceId },
+      include: { user: true },
+    });
+  }
+
+  static async deleteSession(deviceId: string) {
+    await prisma.session.deleteMany({
+      where: { deviceId },
+    });
+  }
+
+  static async createSession(
+    userId: string,
+    refreshTokenHash: string,
+    deviceId: string,
+    expiresAt: Date
+  ) {
+    return prisma.session.create({
+      data: {
+        userId,
+        refreshTokenHash,
+        deviceId,
+        expiresAt,
       },
     });
-
-    logger.info(`Deleted FileMetadata with file_id: ${id}`);
   }
 
-  static async deleteChunks(id: string) {
-    await prisma.chunk.deleteMany({
-      where: {
-        fileId: id,
+  static async updateSession(
+    sessionId: string,
+    newHash: string,
+    newExpiry: Date
+  ) {
+    return prisma.session.update({
+      where: { id: sessionId },
+      data: {
+        refreshTokenHash: newHash,
+        expiresAt: newExpiry,
       },
     });
-    logger.info(`Deleted chunks with file_id: ${id}`);
   }
 
-  static async recordUploadedMetadata(id: string) {
-    await prisma.fileMetadata.update({
-      where: { fileId: id },
-      data: { status: FileStatus.UPLOADED },
-    });
-    logger.info(`Updated metadata status with file_id: ${id}`);
-  }
-
-  static async recordFailedMetadata(id: string) {
-    await prisma.fileMetadata.update({
-      where: { fileId: id },
-      data: { status: FileStatus.FAILED },
-    });
-    logger.info(`Updated metadata status with file_id: ${id}`);
-  }
-
+  // FILE METADATA
   static async createFileMetadata(
-    file_id: string,
-    file_name: string,
-    file_type: string,
-    file_size: string,
-    s3_key: string,
-    user_id: string
+    fileId: string,
+    fileName: string,
+    mimeType: string,
+    fileSize: string,
+    s3Key: string,
+    userId: string
   ) {
     await prisma.fileMetadata.create({
       data: {
-        fileId: file_id,
-        fileName: file_name,
-        mimeType: file_type,
-        size: parseInt(file_size, 10),
-        s3Key: s3_key,
+        fileId,
+        fileName,
+        mimeType,
+        size: parseInt(fileSize, 10),
+        s3Key,
         status: FileStatus.UPLOADING,
-        userId: user_id,
+        userId,
       },
     });
-    logger.info(`Created metadata with file_id: ${file_id}`);
+
+    logger.info(`Created metadata for file_id: ${fileId}`);
   }
 
+  static async recordUploadedMetadata(fileId: string) {
+    await prisma.fileMetadata.update({
+      where: { fileId },
+      data: { status: FileStatus.UPLOADED },
+    });
+
+    logger.info(`Marked file_id ${fileId} as UPLOADED`);
+  }
+
+  static async recordFailedMetadata(fileId: string) {
+    await prisma.fileMetadata.update({
+      where: { fileId },
+      data: { status: FileStatus.FAILED },
+    });
+
+    logger.info(`Marked file_id ${fileId} as FAILED`);
+  }
+
+  static async deleteFileMetadata(fileId: string) {
+    await prisma.fileMetadata.delete({
+      where: { fileId },
+    });
+
+    logger.info(`Deleted metadata for file_id: ${fileId}`);
+  }
+
+  // CHUNKS
   static async createPendingChunk(
-    file_id: string,
-    chunk_index: number,
+    fileId: string,
+    chunkIndex: number,
     size: number,
-    s3_key: string,
+    s3Key: string,
     etag?: string
   ) {
     await prisma.chunk.create({
       data: {
-        fileId: file_id,
-        chunkIndex: chunk_index,
-        size: size,
-        s3Key: s3_key,
+        fileId,
+        chunkIndex,
+        size,
+        s3Key,
         checksum: etag,
+        status: ChunkStatus.PENDING,
       },
     });
-    logger.info(`Created chunk at index: ${chunk_index}, with PENDING status`);
+
+    logger.info(`Created chunk index ${chunkIndex}`);
   }
 
-  static async updateChunk(file_id: string, chunk_index: number, etag: string) {
+  static async updateChunk(fileId: string, chunkIndex: number, etag: string) {
     await prisma.chunk.update({
       where: {
         fileId_chunkIndex: {
-          fileId: file_id,
-          chunkIndex: chunk_index,
+          fileId,
+          chunkIndex,
         },
       },
       data: {
@@ -103,36 +180,38 @@ export class PrismaUtil {
         status: ChunkStatus.COMPLETED,
       },
     });
-    logger.info(
-      `Updated chunk at index: ${chunk_index}, with COMPLETED status`
-    );
+
+    logger.info(`Updated chunk index ${chunkIndex} as COMPLETED`);
   }
 
-  static async recordFailedChunkOne(file_id: string, chunk_index: number) {
+  static async recordFailedChunk(fileId: string, chunkIndex: number) {
     await prisma.chunk.update({
       where: {
         fileId_chunkIndex: {
-          fileId: file_id,
-          chunkIndex: chunk_index,
+          fileId,
+          chunkIndex,
         },
       },
-      data: {
-        status: ChunkStatus.FAILED,
-      },
+      data: { status: ChunkStatus.FAILED },
     });
-    logger.info(`Updated chunk at index: ${chunk_index}, with FAILED status`);
+
+    logger.info(`Marked chunk index ${chunkIndex} as FAILED`);
   }
 
-  static async recordFailedChunkMany(file_id: string) {
+  static async recordFailedChunkMany(fileId: string) {
     await prisma.chunk.updateMany({
-      where: {
-        fileId: file_id,
-      },
-      data: {
-        status: ChunkStatus.FAILED,
-      },
+      where: { fileId },
+      data: { status: ChunkStatus.FAILED },
     });
 
-    logger.info(`Update all chunks status to FAILED with file_id: ${file_id}`);
+    logger.info(`Marked all chunks as FAILED for file_id: ${fileId}`);
+  }
+
+  static async deleteChunks(fileId: string) {
+    await prisma.chunk.deleteMany({
+      where: { fileId },
+    });
+
+    logger.info(`Deleted chunks for file_id: ${fileId}`);
   }
 }

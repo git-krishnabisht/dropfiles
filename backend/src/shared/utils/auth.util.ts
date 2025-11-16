@@ -1,14 +1,13 @@
 import bcrypt from "bcrypt";
 
 export class AuthUtils {
-  static async hashPassword(password: string) {
+  static generateHash(str: string) {
     const salt_rounds = 12;
-    const password_hash = await bcrypt.hash(password, salt_rounds);
-    return password_hash;
+    const hash = bcrypt.hash(str, salt_rounds);
+    return hash;
   }
 
-  static async hashCompare(raw: string, hashed: string) {
-    const res = await bcrypt.compare(raw, hashed);
-    return res;
+  static compareHash(raw: string, hashed: string) {
+    return bcrypt.compare(raw, hashed);
   }
 }

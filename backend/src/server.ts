@@ -10,7 +10,7 @@ import cookieParser from "cookie-parser";
 import "./shared/config/env.config.js";
 // import multer from "multer";
 import { configureBucketCORS } from "./shared/services/s3.service.js";
-import { authenticateToken } from "./shared/middleware/auth.middleware.js";
+import { protected_route } from "./shared/middleware/auth.middleware.js";
 
 const app = express();
 app.use(express.json());
@@ -23,6 +23,7 @@ app.use(
     origin: ["http://localhost:5173", "http://localhost:4173"],
   })
 );
+app.set("trust proxy", true);
 configureBucketCORS();
 const server = http.createServer(app);
 const PORT = 50136;
@@ -40,7 +41,7 @@ app.use((req: Request, _: Response, next) => {
 
 app.use("/api/auth", auth_router);
 app.use("/api/files", file_router);
-app.get("/api/health", (_: Request, res: Response) => {
+app.get("/api/health", protected_route, (req: Request, res: Response) => {
   logger.info("Health check requested");
   res.send({ server: "running", timestamp: new Date().toISOString() });
 });
