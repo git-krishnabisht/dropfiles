@@ -1,7 +1,6 @@
 import React, { useState, useRef } from "react";
 import { Upload, X, CheckCircle, AlertCircle, File } from "lucide-react";
 
-// Generate a simple UUID
 const generateUUID = () => {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
@@ -29,8 +28,9 @@ class FileUploader {
   private apiBaseUrl: string;
   private onProgress?: (progress: UploadProgress) => void;
   private abortController: AbortController;
-
   private maxParallelUploads: number;
+  private uploadId?: string;
+  private abortCalled: boolean = false;
 
   constructor(
     file: File,
@@ -56,13 +56,18 @@ class FileUploader {
   }
 
   cancel(): void {
+    console.log("Cancelling upload...");
     this.abortController.abort();
   }
 
-  async cancelWithCleanup(uploadId?: string): Promise<void> {
+  async cancelWithCleanup(): Promise<void> {
+    console.log("Cancelling upload with cleanup...", {
+      uploadId: this.uploadId,
+    });
     this.abortController.abort();
-    if (uploadId) {
-      await this.abortUpload(uploadId);
+
+    if (this.uploadId && !this.abortCalled) {
+      await this.abortUpload(this.uploadId);
     }
   }
 
@@ -84,6 +89,10 @@ class FileUploader {
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < retries; attempt++) {
+      if (this.abortController.signal.aborted) {
+        throw new Error("Upload cancelled by user");
+      }
+
       try {
         const response = await fetch(`${this.apiBaseUrl}${endpoint}`, {
           method: "POST",
@@ -124,23 +133,46 @@ class FileUploader {
     throw lastError || new Error("Request failed after retries");
   }
 
-  private async abortUpload(uploadId?: string): Promise<void> {
+  private async abortUpload(uploadId: string): Promise<void> {
+    if (this.abortCalled) {
+      console.log("Abort already called, skipping...");
+      return;
+    }
+
+    this.abortCalled = true;
+
     try {
-      if (uploadId) {
-        await this.makeRequest("/files/abort-upload", {
+      console.log("Calling abort endpoint", { uploadId, fileId: this.fileId });
+
+      const abortRequestController = new AbortController();
+      const timeout = setTimeout(() => abortRequestController.abort(), 10000);
+
+      const response = await fetch(`${this.apiBaseUrl}/files/abort-upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           uploadId,
-          fileId: this.fileId,
-        });
-        console.log("Upload aborted successfully");
+          file_id: this.fileId,
+        }),
+        signal: abortRequestController.signal,
+        credentials: "include",
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to abort upload");
       }
+
+      const result = await response.json();
+      console.log("Upload aborted successfully", result);
     } catch (err) {
-      console.error("Failed to abort upload:", err);
+      console.error("Failed to abort upload on server:", err);
     }
   }
 
   async upload(): Promise<{ success: boolean; error?: string }> {
-    let uploadId: string | undefined;
-
     try {
       console.log("Initiating upload...", {
         fileName: this.file.name,
@@ -156,23 +188,26 @@ class FileUploader {
       });
 
       const response = await initResponse.json();
-      uploadId = response.uploadId;
+      this.uploadId = response.uploadId;
       const { presignedUrls } = response;
 
-      if (!presignedUrls || !uploadId) {
+      if (!presignedUrls || !this.uploadId) {
         throw new Error("Invalid response from server");
       }
 
       console.log("Upload initialized", {
-        uploadId,
+        uploadId: this.uploadId,
         urlCount: presignedUrls.length,
       });
 
       const uploadedParts: UploadPart[] = [];
       let completedChunks = 0;
 
-      // Upload chunks in parallel batches
       const uploadChunk = async (partNumber: number) => {
+        if (this.abortController.signal.aborted) {
+          throw new Error("Upload cancelled by user");
+        }
+
         const chunk = this.getPart(partNumber);
 
         console.log(`Uploading chunk ${partNumber}/${this.numParts}...`);
@@ -204,7 +239,7 @@ class FileUploader {
         }).then((x) => x.json());
 
         if (!record_chunk.success) {
-          await this.abortUpload(uploadId);
+          throw new Error(`Failed to record chunk ${partNumber}`);
         }
 
         completedChunks++;
@@ -216,8 +251,11 @@ class FileUploader {
         };
       };
 
-      // Process chunks in parallel batches
       for (let i = 1; i <= this.numParts; i += this.maxParallelUploads) {
+        if (this.abortController.signal.aborted) {
+          throw new Error("Upload cancelled by user");
+        }
+
         const batch = [];
         for (
           let j = i;
@@ -235,7 +273,7 @@ class FileUploader {
       const completeResponse = await this.makeRequest(
         "/files/complete-upload",
         {
-          uploadId,
+          uploadId: this.uploadId,
           parts: uploadedParts,
           fileId: this.fileId,
         }
@@ -254,9 +292,16 @@ class FileUploader {
         err instanceof Error ? err.message : "Unknown error occurred";
       console.error("Upload failed:", errorMessage);
 
-      // Abort the upload on the server if it was initiated
-      if (uploadId) {
-        await this.abortUpload(uploadId);
+      // Only call abort if:
+      // 1. We have an uploadId
+      // 2. It's not a user cancellation (that's handled by cancelWithCleanup)
+      // 3. We haven't already called abort
+      if (
+        this.uploadId &&
+        errorMessage !== "Upload cancelled by user" &&
+        !this.abortCalled
+      ) {
+        await this.abortUpload(this.uploadId);
       }
 
       return { success: false, error: errorMessage };
@@ -339,9 +384,12 @@ export default function FileUploaderApp() {
     }
   };
 
-  const handleCancel = () => {
+  const handleCancel = async () => {
     if (uploaderRef.current) {
-      uploaderRef.current.cancel();
+      setStatus("Cancelling upload...");
+
+      await uploaderRef.current.cancelWithCleanup();
+
       setStatus("Upload cancelled");
       setUploadStatus("error");
       setUploading(false);
@@ -373,7 +421,6 @@ export default function FileUploaderApp() {
         </div>
 
         <div className="space-y-6">
-          {/* File Selection */}
           <div className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center hover:border-indigo-400 transition-colors">
             <input
               ref={fileInputRef}
@@ -404,7 +451,6 @@ export default function FileUploaderApp() {
             </label>
           </div>
 
-          {/* Progress Bar */}
           {uploading && (
             <div className="space-y-2">
               <div className="flex justify-between text-sm text-gray-600">
@@ -420,7 +466,6 @@ export default function FileUploaderApp() {
             </div>
           )}
 
-          {/* Status Message */}
           {status && (
             <div
               className={`flex items-center gap-2 p-4 rounded-lg ${
@@ -439,7 +484,6 @@ export default function FileUploaderApp() {
             </div>
           )}
 
-          {/* Action Buttons */}
           <div className="flex gap-3">
             <button
               onClick={handleUpload}
@@ -462,7 +506,6 @@ export default function FileUploaderApp() {
           </div>
         </div>
 
-        {/* Info */}
         <div className="mt-8 pt-6 border-t border-gray-200">
           <p className="text-xs text-gray-500 text-center">
             Files are uploaded in 5MB chunks with 3 parallel uploads to S3

@@ -192,31 +192,87 @@ export class fileController {
       const { uploadId, file_id } = req.body;
 
       if (!uploadId || !file_id) {
-        return res.status(401).json({
+        return res.status(400).json({
           success: false,
           error: "Missing Values in Request Body",
         });
       }
 
-      const s3_key = await prisma.fileMetadata
-        .findFirst({
-          where: { fileId: file_id },
-          select: { s3Key: true },
-        })
-        .then((x) => x?.s3Key);
+      logger.info("Aborting upload", { file_id, uploadId });
 
-      await PrismaUtil.deleteFileMetadata(file_id);
-      await rd.del(uploadId);
+      const fileMetadata = await prisma.fileMetadata.findFirst({
+        where: { fileId: file_id },
+        select: { s3Key: true },
+      });
+
+      const s3_key = fileMetadata?.s3Key;
+
+      if (!fileMetadata) {
+        logger.info("Upload already aborted (no metadata found)", {
+          file_id,
+          uploadId,
+        });
+        return res.json({
+          success: true,
+          message: "Upload session already aborted",
+        });
+      }
+
+      const redisDeleted = await rd.del(`upload:${uploadId}`);
+      logger.info("Redis cleanup", {
+        uploadId,
+        deleted: redisDeleted,
+        key: `upload:${uploadId}`,
+      });
+
+      try {
+        await PrismaUtil.deleteFileMetadata(file_id);
+        logger.info("Database records deleted", { file_id });
+      } catch (dbErr: any) {
+        if (dbErr.code === "P2025") {
+          logger.info("Database records already deleted", { file_id });
+        } else {
+          throw dbErr;
+        }
+      }
 
       if (s3_key) {
-        const uploader = new S3Uploader(config.aws.bucket, s3_key);
-        await uploader.abortUpload(uploadId);
+        try {
+          const uploader = new S3Uploader(config.aws.bucket, s3_key);
+          await uploader.abortUpload(uploadId);
+          logger.info("S3 multipart upload aborted", { s3_key, uploadId });
+        } catch (s3Err: any) {
+          if (s3Err.name === "NoSuchUpload") {
+            logger.info("S3 upload already aborted or doesn't exist", {
+              s3_key,
+              uploadId,
+            });
+          } else {
+            logger.error("Failed to abort S3 upload", {
+              s3_key,
+              uploadId,
+              error: s3Err,
+            });
+          }
+        }
       }
-      logger.info("Session Aborted", { file_id: file_id, s3_key: s3_key });
-      return res.json({ success: true, status: "Session aborted" });
+
+      logger.info("Upload session aborted successfully", {
+        file_id,
+        uploadId,
+        s3_key,
+      });
+
+      return res.json({
+        success: true,
+        message: "Upload session aborted successfully",
+      });
     } catch (err) {
-      logger.error("IDK What to call Error", { err });
-      return res.status(500).json({ success: false, error: "Internal error" });
+      logger.error("Error aborting upload", { err });
+      return res.status(500).json({
+        success: false,
+        error: "Internal error while aborting upload",
+      });
     }
   }
 }

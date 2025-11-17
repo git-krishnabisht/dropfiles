@@ -8,10 +8,16 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 
+const MAX_LOG_SIZE = 10 * 1024 * 1024;
+const MAX_LOG_FILES = 5;
+
 class JsonArrayTransport extends Transport {
   private filename: string;
-  private logCache: Map<string, any[]> = new Map();
-  private writeTimeout: Map<string, NodeJS.Timeout> = new Map();
+  private logCache: any[] = [];
+  private writeTimeout?: NodeJS.Timeout;
+  private isWriting: boolean = false;
+  private maxCacheSize: number = 100;
+  private flushInterval: number = 5000;
 
   constructor(opts: any) {
     super(opts);
@@ -20,20 +26,23 @@ class JsonArrayTransport extends Transport {
       : path.resolve(logsDir, path.basename(opts.filename));
 
     this.filename = filename;
+    this.maxCacheSize = opts.maxCacheSize || 100;
+    this.flushInterval = opts.flushInterval || 5000;
 
     const logDir = path.dirname(this.filename);
     if (!fs.existsSync(logDir)) {
       fs.mkdirSync(logDir, { recursive: true });
     }
+
+    if (!fs.existsSync(this.filename)) {
+      fs.writeFileSync(this.filename, "[]", "utf-8");
+    }
+
+    setInterval(() => this.flush(), this.flushInterval);
   }
 
   log(info: any, callback: () => void) {
     setImmediate(() => {
-      if ((this as any).level && info.level !== (this as any).level) {
-        callback();
-        return;
-      }
-
       const logEntry = {
         timestamp: info.timestamp,
         level: info.level,
@@ -41,49 +50,85 @@ class JsonArrayTransport extends Transport {
         ...info.metadata,
       };
 
-      const absolutePath = this.filename;
+      this.logCache.push(logEntry);
 
-      if (!this.logCache.has(absolutePath)) {
-        let logs: any[] = [];
-
-        if (fs.existsSync(absolutePath)) {
-          try {
-            const content = fs.readFileSync(absolutePath, "utf-8");
-            if (content.trim()) {
-              logs = JSON.parse(content);
-            }
-          } catch (err) {
-            logs = [];
-          }
-        }
-
-        this.logCache.set(absolutePath, logs);
+      if (this.logCache.length >= this.maxCacheSize) {
+        this.flush();
       }
-
-      const logs = this.logCache.get(absolutePath)!;
-      logs.push(logEntry);
-
-      if (this.writeTimeout.has(absolutePath)) {
-        clearTimeout(this.writeTimeout.get(absolutePath)!);
-      }
-
-      const timeout = setTimeout(() => {
-        try {
-          fs.writeFileSync(
-            absolutePath,
-            JSON.stringify(logs, null, 2),
-            "utf-8"
-          );
-        } catch (err) {
-          console.error(`Failed to write logs to ${absolutePath}:`, err);
-        }
-        this.writeTimeout.delete(absolutePath);
-      }, 100);
-
-      this.writeTimeout.set(absolutePath, timeout);
 
       callback();
     });
+  }
+
+  private async flush() {
+    if (this.isWriting || this.logCache.length === 0) {
+      return;
+    }
+
+    this.isWriting = true;
+
+    try {
+      await this.rotateIfNeeded();
+
+      const logsToWrite = [...this.logCache];
+      this.logCache = [];
+
+      let existingLogs: any[] = [];
+      try {
+        const content = fs.readFileSync(this.filename, "utf-8");
+        if (content.trim()) {
+          existingLogs = JSON.parse(content);
+        }
+      } catch (err) {
+        existingLogs = [];
+      }
+
+      const allLogs = [...existingLogs, ...logsToWrite];
+
+      const tempFile = `${this.filename}.tmp`;
+      fs.writeFileSync(tempFile, JSON.stringify(allLogs, null, 2), "utf-8");
+      fs.renameSync(tempFile, this.filename);
+    } catch (err) {
+      console.error(`Failed to flush logs to ${this.filename}:`, err);
+      this.logCache.unshift(...this.logCache);
+    } finally {
+      this.isWriting = false;
+    }
+  }
+
+  private async rotateIfNeeded() {
+    try {
+      const stats = fs.statSync(this.filename);
+
+      if (stats.size > MAX_LOG_SIZE) {
+        for (let i = MAX_LOG_FILES - 1; i > 0; i--) {
+          const oldFile = `${this.filename}.${i}`;
+          const newFile = `${this.filename}.${i + 1}`;
+
+          if (fs.existsSync(oldFile)) {
+            if (i === MAX_LOG_FILES - 1) {
+              fs.unlinkSync(oldFile);
+            } else {
+              fs.renameSync(oldFile, newFile);
+            }
+          }
+        }
+
+        fs.renameSync(this.filename, `${this.filename}.1`);
+        fs.writeFileSync(this.filename, "[]", "utf-8");
+      }
+    } catch (err) {
+      if ((err as any).code !== "ENOENT") {
+        console.error(`Failed to rotate log ${this.filename}:`, err);
+      }
+    }
+  }
+
+  close() {
+    if (this.writeTimeout) {
+      clearTimeout(this.writeTimeout);
+    }
+    this.flush();
   }
 }
 
@@ -106,7 +151,7 @@ const consoleFormat = format.combine(
 );
 
 const logger = createLogger({
-  level: process.env.LOG_LEVEL || "debug",
+  level: process.env.LOG_LEVEL || "info",
   defaultMeta: {
     service: "dropfiles-backend",
     environment: process.env.NODE_ENV || "development",
@@ -114,39 +159,68 @@ const logger = createLogger({
   transports: [
     new transports.Console({
       format: consoleFormat,
+      level: "debug",
     }),
     new JsonArrayTransport({
       filename: "./logs/error.log.json",
       level: "error",
       format: structuredFormat,
+      maxCacheSize: 50,
+      flushInterval: 3000,
     }),
     new JsonArrayTransport({
-      filename: "./logs/debug.log.json",
-      level: "debug",
+      filename: "./logs/warn.log.json",
+      level: "warn",
       format: structuredFormat,
+      maxCacheSize: 50,
+      flushInterval: 3000,
     }),
     new JsonArrayTransport({
       filename: "./logs/info.log.json",
       level: "info",
       format: structuredFormat,
+      maxCacheSize: 100,
+      flushInterval: 5000,
     }),
     new JsonArrayTransport({
       filename: "./logs/combined.log.json",
       format: structuredFormat,
+      maxCacheSize: 100,
+      flushInterval: 5000,
     }),
   ],
   exceptionHandlers: [
     new JsonArrayTransport({
       filename: "./logs/exceptions.log.json",
       format: structuredFormat,
+      maxCacheSize: 10,
+      flushInterval: 1000,
     }),
   ],
   rejectionHandlers: [
     new JsonArrayTransport({
       filename: "./logs/rejections.log.json",
       format: structuredFormat,
+      maxCacheSize: 10,
+      flushInterval: 1000,
     }),
   ],
+});
+
+process.on("SIGTERM", () => {
+  logger.transports.forEach((transport) => {
+    if (transport instanceof JsonArrayTransport) {
+      transport.close();
+    }
+  });
+});
+
+process.on("SIGINT", () => {
+  logger.transports.forEach((transport) => {
+    if (transport instanceof JsonArrayTransport) {
+      transport.close();
+    }
+  });
 });
 
 export const logRequest = (req: any) => {
