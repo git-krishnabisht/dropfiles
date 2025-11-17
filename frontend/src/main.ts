@@ -71,6 +71,7 @@ class FileUploader {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
           signal: this.abortController.signal,
+          credentials: "include",
         });
 
         if (!response.ok) {
@@ -107,13 +108,6 @@ class FileUploader {
 
   async upload(): Promise<{ success: boolean; error?: string }> {
     try {
-      const s3Key = `dropbox-test/e5234053-2236-43cc-b979-48ab5bc2a3bc/${this.file.name}`;
-      const userId = this.getUserId();
-
-      if (!userId) {
-        throw new Error("User not authenticated");
-      }
-
       console.log("Initiating upload...", {
         fileName: this.file.name,
         fileSize: this.file.size,
@@ -126,8 +120,6 @@ class FileUploader {
         file_name: this.file.name,
         file_type: this.file.type,
         file_size: this.file.size.toString(),
-        user_id: userId,
-        s3_key: s3Key,
       });
 
       const { presignedUrls, uploadId } = await initResponse.json();
@@ -175,7 +167,6 @@ class FileUploader {
           chunk_index: i - 1, // 0-indexed in database
           size: chunk.size.toString(),
           etag: etag.replace(/"/g, ""), // Remove quotes from ETag
-          s3_key: s3Key,
         });
 
         uploadedParts.push({
@@ -212,12 +203,6 @@ class FileUploader {
       console.error("Upload failed:", errorMessage);
       return { success: false, error: errorMessage };
     }
-  }
-
-  private getUserId(): string | null {
-    return (
-      localStorage.getItem("userId") || "e5234053-2236-43cc-b979-48ab5bc2a3bc"
-    );
   }
 }
 

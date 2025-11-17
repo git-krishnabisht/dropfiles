@@ -48,7 +48,8 @@ app.get("/api/health", protected_route, (req: Request, res: Response) => {
 
 app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
   logger.error("Unhandled error", {
-    error: error.message,
+    error: error,
+    error_msg: error.message,
     stack: error.stack,
     url: req.url,
     method: req.method,

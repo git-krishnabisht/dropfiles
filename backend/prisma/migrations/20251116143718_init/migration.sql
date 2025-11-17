@@ -62,10 +62,10 @@ CREATE UNIQUE INDEX "user_email_key" ON "public"."user" ("email");
 CREATE UNIQUE INDEX "sessions_device_id_key" ON "public"."sessions" ("device_id");
 
 -- CreateIndex
-CREATE INDEX "metadata_user_id_idx" ON "public"."metadata" ("user_id");
+CREATE UNIQUE INDEX "metadata_s3_key_key" ON "public"."metadata" ("s3_key");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "chunks_index_key" ON "public"."chunks" ("index");
+CREATE INDEX "metadata_user_id_idx" ON "public"."metadata" ("user_id");
 
 -- CreateIndex
 CREATE INDEX "chunks_file_id_idx" ON "public"."chunks" ("file_id");

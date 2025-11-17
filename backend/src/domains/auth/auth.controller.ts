@@ -3,14 +3,14 @@ import prisma from "../../shared/config/prisma.config";
 import logger from "../../shared/utils/logger.util";
 import { sts } from "../../types/common.types";
 import { jwtService } from "../../shared/services/jwt.service";
-import { AuthUtils } from "../../shared/utils/auth.util";
+import { CryptUtils } from "../../shared/utils/crypt.util";
 import { ValidationUtil } from "../../shared/utils/validate.util";
 import { PrismaUtil } from "../../shared/utils/prisma.util";
 import crypto, { randomUUID } from "crypto";
 
 // TTLs in ms
 const RT_TTL = 15 * 24 * 60 * 60 * 1000; // 15 days
-const AT_TTL = 15 * 60 * 1000; // 15 minutes
+const AT_TTL = 1 * 24 * 60 * 60 * 1000; // 1 day (dev)
 const DEVICE_ID_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 export class authController {
@@ -43,8 +43,25 @@ export class authController {
       return res.status(409).json({ error: "User already exists in the DB" }); // 409 - conflit
     }
 
+    const password_hash = await CryptUtils.generateHash(user.password);
+    const created_user = await PrismaUtil.createUser(
+      user.email,
+      user.name,
+      password_hash
+    );
+
+    const user_id = await PrismaUtil.getUserId(user.email);
+
+    if (!user_id) {
+      logger.info("Unauthorized, Missing UserId in JWT");
+      return res.status(401).json({
+        error: "Unauthorized, Missing UserId in JWT",
+      });
+    }
+
     const access_token = await jwtService.assign(
       {
+        userId: user_id,
         email: user.email,
       },
       AT_TTL / 1000
@@ -57,19 +74,12 @@ export class authController {
       });
     }
 
-    const password_hash = await AuthUtils.generateHash(user.password);
-    const created_user = await PrismaUtil.createUser(
-      user.email,
-      user.name,
-      password_hash
-    );
-
     logger.info("Created user record in the DB", {
       user: req.body.user.email,
     });
 
     const refresh_token = crypto.randomBytes(64).toString("hex");
-    const refresh_token_hash = await AuthUtils.generateHash(refresh_token);
+    const refresh_token_hash = await CryptUtils.generateHash(refresh_token);
     const exp = new Date(Date.now() + RT_TTL);
     const device_id = randomUUID();
 
@@ -129,7 +139,7 @@ export class authController {
       });
     }
 
-    const valid_hash = AuthUtils.compareHash(user.password, password_hash);
+    const valid_hash = CryptUtils.compareHash(user.password, password_hash);
     if (!valid_hash) {
       logger.info(`Invalid Password`);
       return res.status(401).json({
@@ -144,23 +154,25 @@ export class authController {
 
     const user_id = await PrismaUtil.getUserId(user.email);
 
+    if (!user_id) {
+      return res.status(400).json({
+        error: "Missing UserId",
+      });
+    }
+
     const session = await PrismaUtil.getSessionByDevice(device_id);
     if (session && session.userId === user_id) {
       await PrismaUtil.deleteSession(device_id);
     }
 
     const refresh_token = crypto.randomBytes(64).toString("hex");
-    const refresh_token_hash = await AuthUtils.generateHash(refresh_token);
+    const refresh_token_hash = await CryptUtils.generateHash(refresh_token);
     const exp = new Date(Date.now() + RT_TTL);
-    await PrismaUtil.createSession(
-      user_id!,
-      refresh_token_hash,
-      device_id,
-      exp
-    );
+    await PrismaUtil.createSession(user_id, refresh_token_hash, device_id, exp);
 
     const access_token = await jwtService.assign(
       {
+        userId: user_id,
         email: user.email,
       },
       AT_TTL / 1000
@@ -212,7 +224,7 @@ export class authController {
         .status(401)
         .json({ error: "No Session available with this Device ID" });
 
-    const valid_rt = await AuthUtils.compareHash(
+    const valid_rt = await CryptUtils.compareHash(
       refresh_token,
       session.refreshTokenHash
     );
@@ -225,12 +237,13 @@ export class authController {
 
     const new_access_token = await jwtService.assign(
       {
+        userId: user.id,
         email: user.email,
       },
       AT_TTL / 1000
     );
     const new_refresh_token = crypto.randomBytes(64).toString("hex");
-    const new_refresh_token_hash = await AuthUtils.generateHash(
+    const new_refresh_token_hash = await CryptUtils.generateHash(
       new_refresh_token
     );
     const exp = new Date(Date.now() + RT_TTL);
@@ -279,3 +292,59 @@ export class authController {
     return res.status(200).json({ status: "Signed out" });
   }
 }
+
+// {
+//   "name": "backend",
+//   "version": "1.0.0",
+//   "description": "",
+//   "main": "server.ts",
+//   "type": "module",
+//   "scripts": {
+//     "dev": "tsx --watch src/server.ts",
+//     "start": "node dist/server.js",
+//     "build": "tsc",
+//     "clean": "rm -rf dist"
+//   },
+//   "keywords": [],
+//   "author": "",
+//   "license": "ISC",
+//   "devDependencies": {
+//     "@types/aws-sdk": "^0.0.42",
+//     "@types/bcrypt": "^6.0.0",
+//     "@types/chokidar": "^1.7.5",
+//     "@types/cookie-parser": "^1.4.9",
+//     "@types/cors": "^2.8.19",
+//     "@types/dotenv": "^6.1.1",
+//     "@types/express": "^5.0.3",
+//     "@types/express-session": "^1.18.2",
+//     "@types/jsonwebtoken": "^9.0.10",
+//     "@types/multer": "^2.0.0",
+//     "@types/node": "^24.3.3",
+//     "@types/passport": "^1.0.17",
+//     "@types/winston": "^2.4.4",
+//     "bcrypt": "^6.0.0",
+//     "prisma": "^6.16.2",
+//     "tsx": "^4.20.5",
+//     "typescript": "^5.9.2"
+//   },
+//   "dependencies": {
+//     "@aws-sdk/client-s3": "^3.888.0",
+//     "@aws-sdk/client-sqs": "^3.888.0",
+//     "@aws-sdk/s3-request-presigner": "^3.888.0",
+//     "@prisma/client": "^6.16.2",
+//     "aws-sdk": "^2.1692.0",
+//     "chokidar": "^4.0.3",
+//     "cookie-parser": "^1.4.7",
+//     "cors": "^2.8.5",
+//     "dotenv": "^17.2.2",
+//     "express": "^5.1.0",
+//     "express-session": "^1.18.2",
+//     "ioredis": "^5.8.2",
+//     "jsonwebtoken": "^9.0.2",
+//     "multer": "^2.0.2",
+//     "passport": "^0.7.0",
+//     "passport-google-oauth20": "^2.0.0",
+//     "uuid": "^13.0.0",
+//     "winston": "^3.17.0"
+//   }
+// }

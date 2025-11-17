@@ -51,7 +51,7 @@ model FileMetadata {
   fileName String     @map("file_name")
   mimeType String     @map("mime_type")
   size     Int?
-  s3Key    String     @map("s3_key")
+  s3Key    String     @unique @map("s3_key")
   status   FileStatus @default(UPLOADING)
   userId   String     @map("user_id")
 
@@ -67,7 +67,7 @@ model FileMetadata {
 model Chunk {
   id         String      @id @default(uuid())
   fileId     String      @map("file_id")
-  chunkIndex Int         @unique @map("index")
+  chunkIndex Int         @map("index")
   size       Int
   s3Key      String      @map("s3_key")
   checksum   String?

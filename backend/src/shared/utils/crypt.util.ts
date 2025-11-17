@@ -1,6 +1,6 @@
 import bcrypt from "bcrypt";
 
-export class AuthUtils {
+export class CryptUtils {
   static generateHash(str: string) {
     const salt_rounds = 12;
     const hash = bcrypt.hash(str, salt_rounds);

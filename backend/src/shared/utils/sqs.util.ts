@@ -124,6 +124,10 @@ export class SqsUtil {
   }
 
   static async processS3Record(record: any, messageId?: string) {
+    logger.debug(
+      "Raw Record comeing from SQS in method processS3Record",
+      record
+    );
     const rawKey: string | undefined = record?.s3?.object?.key;
     if (!rawKey) {
       logger.warn("Record missing S3 object key", { record, messageId });

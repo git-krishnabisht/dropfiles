@@ -17,8 +17,6 @@ interface GetUrlsRequestBody {
   file_name: string;
   file_type: string;
   file_size: string;
-  user_id: string;
-  s3_key: string;
 }
 
 interface CompleteUploadRequestBody {
@@ -33,7 +31,6 @@ interface RecordChunkRequestBody {
   chunk_index: number;
   size: string;
   etag: string;
-  s3_key: string;
 }
 
 export class fileController {
@@ -42,9 +39,7 @@ export class fileController {
       body.file_id &&
       body.file_name &&
       body.file_type &&
-      body.file_size &&
-      body.user_id &&
-      body.s3_key
+      body.file_size
     );
   }
 
@@ -56,7 +51,6 @@ export class fileController {
       typeof body.chunk_index === "number" &&
       body.chunk_index >= 0 &&
       body.size &&
-      body.s3_key &&
       body.etag
     );
   }
@@ -81,8 +75,9 @@ export class fileController {
       });
     }
 
-    const { file_id, file_name, file_type, file_size, user_id, s3_key } =
-      req.body;
+    const { file_id, file_name, file_type, file_size } = req.body;
+    const user_id = req.jwtPayload?.userId;
+    const s3_key = `dropbox/${user_id}/${file_name}`;
 
     const uploader = new S3Uploader(config.aws.bucket, s3_key);
     let uploadId: string | null = null;
@@ -136,14 +131,12 @@ export class fileController {
 
         urls.push(psurl);
       }
-      console.log("debug point 1");
 
       if (urls.length !== numParts) {
         throw new Error(
           `URL count mismatch: expected ${numParts}, got ${urls.length}`
         );
       }
-      console.log("debug point 2");
 
       // Store upload metadata in Redis with TTL
       await rd.set(
@@ -155,7 +148,6 @@ export class fileController {
         "EX",
         REDIS_TTL
       );
-      console.log("debug point 3");
 
       await PrismaUtil.createFileMetadata(
         file_id,
@@ -163,17 +155,15 @@ export class fileController {
         file_type,
         file_size,
         s3_key,
-        user_id
+        user_id!
       );
 
-      console.log("debug point 4");
       for (let i = 0; i < numParts; i++) {
         const isLast = i === numParts - 1;
         const chunkSize = isLast ? fileSizeBytes - i * CHUNK_SIZE : CHUNK_SIZE;
 
         await PrismaUtil.createPendingChunk(file_id, i, chunkSize, s3_key);
       }
-      console.log("debug point 5");
 
       logger.info("Generated S3 presigned URLs successfully", {
         fileId: file_id,
