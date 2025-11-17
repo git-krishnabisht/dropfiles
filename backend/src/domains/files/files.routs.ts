@@ -10,5 +10,6 @@ router.post("/get-upload-urls", fileController.getUploadUrls);
 router.post("/complete-upload", fileController.completeUpload);
 router.post("/record-chunk", fileController.recordChunkUpload);
 router.post("/get-download-url", fileController.getDownloadUrl);
+router.post("/abort-upload", fileController.abortUpload);
 
 export { router as file_router };

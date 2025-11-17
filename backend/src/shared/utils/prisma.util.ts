@@ -1,6 +1,7 @@
+import { DefaultArgs } from "@prisma/client/runtime/client";
 import prisma from "../config/prisma.config";
 import logger from "./logger.util";
-import { FileStatus, ChunkStatus } from "@prisma/client";
+import { FileStatus, ChunkStatus, PrismaClient, Prisma } from "@prisma/client";
 
 export class PrismaUtil {
   // USER
@@ -97,6 +98,10 @@ export class PrismaUtil {
 
   // FILE METADATA
   static async createFileMetadata(
+    tx: Omit<
+      PrismaClient<Prisma.PrismaClientOptions, never, DefaultArgs>,
+      "$connect" | "$disconnect" | "$on" | "$transaction" | "$extends"
+    >,
     fileId: string,
     fileName: string,
     mimeType: string,
@@ -104,7 +109,7 @@ export class PrismaUtil {
     s3Key: string,
     userId: string
   ) {
-    await prisma.fileMetadata.create({
+    await tx.fileMetadata.create({
       data: {
         fileId,
         fileName,
@@ -147,13 +152,17 @@ export class PrismaUtil {
 
   // CHUNKS
   static async createPendingChunk(
+    tx: Omit<
+      PrismaClient<Prisma.PrismaClientOptions, never, DefaultArgs>,
+      "$connect" | "$disconnect" | "$on" | "$transaction" | "$extends"
+    >,
     fileId: string,
     chunkIndex: number,
     size: number,
     s3Key: string,
     etag?: string
   ) {
-    await prisma.chunk.create({
+    await tx.chunk.create({
       data: {
         fileId,
         chunkIndex,
