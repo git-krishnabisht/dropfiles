@@ -41,7 +41,7 @@ app.use((req: Request, _: Response, next) => {
 
 app.use("/api/auth", auth_router);
 app.use("/api/files", file_router);
-app.get("/api/health", protected_route, (req: Request, res: Response) => {
+app.get("/api/health", protected_route, (_: Request, res: Response) => {
   logger.info("Health check requested");
   res.send({ server: "running", timestamp: new Date().toISOString() });
 });
