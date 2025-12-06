@@ -46,7 +46,7 @@ app.get("/api/health", protected_route, (_: Request, res: Response) => {
   res.send({ server: "running", timestamp: new Date().toISOString() });
 });
 
-app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
+app.use((error: Error, req: Request, res: Response, _: NextFunction) => {
   logger.error("Unhandled error", {
     error: error,
     error_msg: error.message,

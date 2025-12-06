@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
-import logger from "../utils/logger.util";
+import logger from "../utils/logger.util.js";
 
-dotenv.config();
+dotenv.config({path: "../.env"});
 
 const requiredEnvVars = [
   "AWS_ACCESS_KEY_ID",
@@ -29,8 +29,8 @@ export const config = {
     sqs: process.env.SQS_QUEUE_URL!,
   },
   jwt: {
-    privateKey: process.env.PRIVATE_KEY!,
-    publicKey: process.env.PUBLIC_KEY!,
+    privateKey: process.env.PRIVATE_KEY!.replace(/\\n/g, "\n"),
+    publicKey: process.env.PUBLIC_KEY!.replace(/\\n/g, "\n"),
   },
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID!,

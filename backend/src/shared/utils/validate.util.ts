@@ -1,6 +1,6 @@
-import { jwtPayload, User } from "../../types/common.types";
-import logger from "../../shared/utils/logger.util";
-import { sts } from "../../types/common.types";
+import { jwtPayload, User } from "../../types/common.types.js";
+import logger from "../../shared/utils/logger.util.js";
+import { sts } from "../../types/common.types.js";
 
 export class ValidationUtil {
   static validateAuthBody(user: User, mode: sts) {

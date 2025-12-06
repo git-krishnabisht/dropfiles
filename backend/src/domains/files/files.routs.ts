@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { fileController } from "./files.controller";
-import { protected_route } from "../../shared/middleware/auth.middleware";
+import { fileController } from "./files.controller.js";
+import { protected_route } from "../../shared/middleware/auth.middleware.js";
 
 const router = Router();
 

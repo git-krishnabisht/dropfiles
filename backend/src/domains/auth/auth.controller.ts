@@ -1,11 +1,11 @@
 import { Request, Response } from "express";
-import prisma from "../../shared/config/prisma.config";
-import logger from "../../shared/utils/logger.util";
-import { sts } from "../../types/common.types";
-import { jwtService } from "../../shared/services/jwt.service";
-import { CryptUtils } from "../../shared/utils/crypt.util";
-import { ValidationUtil } from "../../shared/utils/validate.util";
-import { PrismaUtil } from "../../shared/utils/prisma.util";
+import prisma from "../../shared/config/prisma.config.js";
+import logger from "../../shared/utils/logger.util.js";
+import { sts } from "../../types/common.types.js";
+import { jwtService } from "../../shared/services/jwt.service.js";
+import { CryptUtils } from "../../shared/utils/crypt.util.js";
+import { ValidationUtil } from "../../shared/utils/validate.util.js";
+import { PrismaUtil } from "../../shared/utils/prisma.util.js";
 import crypto, { randomUUID } from "crypto";
 
 // TTLs in ms

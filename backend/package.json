@@ -27,7 +27,6 @@
     "@types/node": "^24.3.3",
     "@types/passport": "^1.0.17",
     "@types/winston": "^2.4.4",
-    "bcrypt": "^6.0.0",
     "prisma": "^6.16.2",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
@@ -38,6 +37,7 @@
     "@aws-sdk/s3-request-presigner": "^3.888.0",
     "@prisma/client": "^6.16.2",
     "aws-sdk": "^2.1692.0",
+    "bcrypt": "^6.0.0",
     "chokidar": "^4.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",

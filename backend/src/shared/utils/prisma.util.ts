@@ -1,6 +1,6 @@
 import { DefaultArgs } from "@prisma/client/runtime/client";
-import prisma from "../config/prisma.config";
-import logger from "./logger.util";
+import prisma from "../config/prisma.config.js";
+import logger from "./logger.util.js";
 import { FileStatus, ChunkStatus, PrismaClient, Prisma } from "@prisma/client";
 
 export class PrismaUtil {
