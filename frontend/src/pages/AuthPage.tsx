@@ -1,13 +1,24 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../contexts/AuthContext";
 
 export default function AuthPage() {
   const [isSignUp, setIsSignUp] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
     email: "",
     password: "",
   });
   const [showPassword, setShowPassword] = useState(false);
+  const navigate = useNavigate();
+  const { isAuthenticated, signin, signup } = useAuth();
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate("/", { replace: true });
+    }
+  }, [isAuthenticated]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData({
@@ -16,20 +27,22 @@ export default function AuthPage() {
     });
   };
 
-  const handleSubmit = () => {
-    console.log("Form submitted:", formData);
-    // Add your authentication logic here
+  const handleSubmit = async () => {
+    if (isSignUp) {
+      await signup(formData.email, formData.name, formData.password);
+    } else {
+      await signin(formData.email, formData.password, rememberMe);
+    }
+    navigate("/", { replace: true });
   };
 
   const handleGoogleSignIn = () => {
     console.log("Google sign in clicked");
-    // Add your Google authentication logic here
   };
 
   return (
     <div className="min-h-screen bg-linear-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
-
         {/* Title */}
         <h1 className="text-2xl font-bold text-gray-800 text-center mb-2">
           {isSignUp ? "Create Account" : "Welcome Back"}
@@ -146,13 +159,15 @@ export default function AuthPage() {
               <label className="flex items-center">
                 <input
                   type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
                   className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                 />
                 <span className="ml-2 text-gray-600">Remember me</span>
               </label>
-              <button className="text-indigo-600 hover:text-indigo-700">
+              {/* <button className="text-indigo-600 hover:text-indigo-700">
                 Forgot password?
-              </button>
+              </button> */}
             </div>
           )}
 

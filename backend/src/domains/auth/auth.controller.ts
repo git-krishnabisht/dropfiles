@@ -10,8 +10,9 @@ import crypto, { randomUUID } from "crypto";
 
 // TTLs in ms
 const RT_TTL = 15 * 24 * 60 * 60 * 1000; // 15 days
-const AT_TTL = 1 * 24 * 60 * 60 * 1000; // 1 day (dev)
+const AT_TTL = 7 * 24 * 60 * 60 * 1000; // 7 day (dev)
 const DEVICE_ID_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
+const ONE_DAY_TTL = 1 * 24 * 60 * 60 * 1000;
 
 export class authController {
   static async sign_up(req: Request, res: Response) {
@@ -41,7 +42,7 @@ export class authController {
         logger.info("User already exists in the DB", {
           user: req.body.user,
         });
-        return res.status(409).json({ error: "User already exists in the DB" }); // 409 - conflit
+        return res.status(409).json({ error: "User already exists in the DB" });
       }
 
       const password_hash = await CryptUtils.generateHash(user.password);
@@ -120,7 +121,11 @@ export class authController {
 
   static async sign_in(req: Request, res: Response) {
     try {
-      const { user } = req.body;
+      const { user, rememberMe } = req.body;
+
+      const NEW_RT_TTL = rememberMe ? RT_TTL : ONE_DAY_TTL;
+      const NEW_AT_TTL = rememberMe ? AT_TTL : ONE_DAY_TTL;
+      const NEW_DEVICE_ID_TTL = rememberMe ? DEVICE_ID_TTL : ONE_DAY_TTL;
 
       const user_validate = ValidationUtil.validateAuthBody(user, sts.SIGNIN);
       if (user_validate.length > 0) {
@@ -133,18 +138,21 @@ export class authController {
       const password_hash = await PrismaUtil.getPasswordHash(user.email);
       if (!password_hash) {
         logger.info(
-          `User ${user.email} doesn't exists in the DB, You need to sign in first`
+          `User ${user.email} doesn't exists in the DB, You need to sign up first`
         );
         return res.status(404).json({
-          error: `User ${user.email} doesn't exists in the DB, You need to sign in first`,
+          error: `User ${user.email} doesn't exist in the DB, You need to sign up first`,
         });
       }
 
-      const valid_hash = CryptUtils.compareHash(user.password, password_hash);
+      const valid_hash = await CryptUtils.compareHash(
+        user.password,
+        password_hash
+      );
       if (!valid_hash) {
-        logger.info(`Invalid Password`);
+        logger.info(`Invalid Password for user ${user.email}`);
         return res.status(401).json({
-          error: `Invalid Password`,
+          error: `Invalid credentials`,
         });
       }
 
@@ -154,21 +162,23 @@ export class authController {
       }
 
       const user_id = await PrismaUtil.getUserId(user.email);
-
       if (!user_id) {
+        logger.error("User ID not found after validation");
         return res.status(400).json({
           error: "Missing UserId",
         });
       }
 
-      const session = await PrismaUtil.getSessionByDevice(device_id);
-      if (session && session.userId === user_id) {
+      const existingSession = await PrismaUtil.getSessionByDevice(device_id);
+      if (existingSession) {
+        logger.info("Deleting existing session for device", { device_id });
         await PrismaUtil.deleteSession(device_id);
       }
 
       const refresh_token = crypto.randomBytes(64).toString("hex");
       const refresh_token_hash = await CryptUtils.generateHash(refresh_token);
-      const exp = new Date(Date.now() + RT_TTL);
+      const exp = new Date(Date.now() + NEW_RT_TTL);
+
       await PrismaUtil.createSession(
         user_id,
         refresh_token_hash,
@@ -181,7 +191,7 @@ export class authController {
           userId: user_id,
           email: user.email,
         },
-        AT_TTL / 1000
+        NEW_AT_TTL / 1000
       );
 
       logger.info(`User ${user.email} has Signed In Successfully`);
@@ -190,21 +200,21 @@ export class authController {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "strict",
-        maxAge: AT_TTL,
+        maxAge: NEW_AT_TTL,
       });
 
       res.cookie("refresh_token", refresh_token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "strict",
-        maxAge: RT_TTL,
+        maxAge: NEW_RT_TTL,
       });
 
       res.cookie("device_id", device_id, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "strict",
-        maxAge: DEVICE_ID_TTL,
+        maxAge: NEW_DEVICE_ID_TTL,
       });
 
       return res.status(200).json({
@@ -221,25 +231,35 @@ export class authController {
       const refresh_token = req.cookies.refresh_token;
       const device_id = req.cookies.device_id;
 
-      if (!refresh_token || !device_id)
+      if (!refresh_token || !device_id) {
         return res
           .status(401)
-          .json({ error: "Refresh Token or Device ID is Invalid" });
+          .json({ error: "Refresh Token or Device ID not present" });
+      }
 
       const session = await prisma.session.findUnique({
         where: { deviceId: device_id },
-        select: { user: true, refreshTokenHash: true },
+        select: { user: true, refreshTokenHash: true, expiresAt: true },
       });
-      if (!session)
+
+      if (!session) {
         return res
           .status(401)
           .json({ error: "No Session available with this Device ID" });
+      }
+
+      if (new Date() > session.expiresAt) {
+        await prisma.session.delete({ where: { deviceId: device_id } });
+        return res.status(401).json({ error: "Session expired" });
+      }
 
       const valid_rt = await CryptUtils.compareHash(
         refresh_token,
         session.refreshTokenHash
       );
+
       if (!valid_rt) {
+        logger.warn("Invalid refresh token attempt", { device_id });
         await prisma.session.delete({ where: { deviceId: device_id } });
         return res.status(401).json({ error: "Invalid Refresh Token" });
       }
@@ -251,13 +271,14 @@ export class authController {
           userId: user.id,
           email: user.email,
         },
-        AT_TTL / 1000
+        ONE_DAY_TTL / 1000
       );
+
       const new_refresh_token = crypto.randomBytes(64).toString("hex");
       const new_refresh_token_hash = await CryptUtils.generateHash(
         new_refresh_token
       );
-      const exp = new Date(Date.now() + RT_TTL);
+      const exp = new Date(Date.now() + ONE_DAY_TTL);
 
       await prisma.session.update({
         where: { deviceId: device_id },
@@ -268,14 +289,19 @@ export class authController {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "strict",
-        maxAge: AT_TTL,
+        maxAge: ONE_DAY_TTL,
       });
 
       res.cookie("refresh_token", new_refresh_token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "strict",
-        maxAge: RT_TTL,
+        maxAge: ONE_DAY_TTL,
+      });
+
+      logger.info("Token refreshed successfully", {
+        userId: user.id,
+        device_id,
       });
 
       return res.status(200).json({
@@ -290,25 +316,53 @@ export class authController {
   static async sign_out(req: Request, res: Response) {
     try {
       const device_id = req.cookies.device_id;
-      if (!device_id) {
-        res.clearCookie("access_token");
-        res.clearCookie("refresh_token");
-        res.clearCookie("device_id");
 
-        return res.status(200).json({
-          status: "Signed Out",
-        });
+      if (device_id) {
+        await PrismaUtil.deleteSession(device_id);
+        logger.info("Session deleted for device", { device_id });
       }
 
-      await PrismaUtil.deleteSession(device_id);
       res.clearCookie("access_token");
       res.clearCookie("refresh_token");
       res.clearCookie("device_id");
 
-      return res.status(200).json({ status: "Signed out" });
+      return res.status(200).json({ status: "Signed out successfully" });
     } catch (err) {
-      logger.error("Error Signin Out", { err });
+      logger.error("Error Signing Out", { err });
       return res.status(500).json({ success: false, error: "Internal error" });
     }
+  }
+
+  static async authenticate(req: Request, res: Response) {
+    const access_token = req.cookies.access_token;
+    const user_id = req.jwtPayload?.userId;
+
+    if (!access_token) {
+      logger.error("access_token not present");
+      return res.status(401).json({ error: "access_token not present" });
+    }
+
+    if (!user_id) {
+      logger.error("user_id not present");
+      return res.status(401).json({
+        error: "user_id not present, hence unauthenticated and invalid token ",
+      });
+    }
+
+    const decode = await jwtService.verify(access_token);
+    if (!decode) {
+      logger.error("user_id not present");
+      return res.status(401).json({
+        error:
+          "user_id not present, hence unauthenticated and/or invalid token ",
+      });
+    }
+
+    if (decode.userId !== user_id) {
+      logger.error("Unauthorized, Invalid token");
+      return res.status(401).json({ error: "Unauthorized, Invalid token" });
+    }
+
+    return res.status(200).json({ status: "Authorized" });
   }
 }
