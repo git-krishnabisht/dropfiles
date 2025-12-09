@@ -5,7 +5,7 @@ import { config } from "../../shared/config/env.config.js";
 import { InitUploadResult } from "../../types/common.types.js";
 import { rd } from "../../shared/utils/redis.util.js";
 import { PrismaUtil } from "../../shared/utils/prisma.util.js";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import prisma from "../../shared/config/prisma.config.js";
 import { ChunkStatus } from "@prisma/client";
@@ -273,6 +273,110 @@ export class fileController {
         success: false,
         error: "Internal error while aborting upload",
       });
+    }
+  }
+
+  static async listFiles(req: Request, res: Response) {
+    try {
+      const user_id = req.jwtPayload?.userId;
+
+      if (!user_id) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+
+      const files = await prisma.fileMetadata.findMany({
+        where: {
+          userId: user_id,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        select: {
+          fileId: true,
+          fileName: true,
+          mimeType: true,
+          size: true,
+          s3Key: true,
+          status: true,
+          createdAt: true,
+        },
+      });
+
+      logger.info("Files listed successfully", {
+        userId: user_id,
+        count: files.length,
+      });
+
+      return res.status(200).json({
+        success: true,
+        files,
+      });
+    } catch (err) {
+      logger.error("Error listing files", { err });
+      return res.status(500).json({ success: false, error: "Internal error" });
+    }
+  }
+
+  static async deleteFile(req: Request, res: Response) {
+    try {
+      const { file_id } = req.body;
+      const user_id = req.jwtPayload?.userId;
+
+      if (!file_id) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Missing file_id" });
+      }
+
+      if (!user_id) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+
+      const file = await prisma.fileMetadata.findFirst({
+        where: {
+          fileId: file_id,
+          userId: user_id,
+        },
+        select: {
+          s3Key: true,
+        },
+      });
+
+      if (!file) {
+        return res.status(404).json({
+          success: false,
+          error: "File not found or unauthorized",
+        });
+      }
+
+      try {
+        const deleteCommand = new DeleteObjectCommand({
+          Bucket: config.aws.bucket,
+          Key: file.s3Key,
+        });
+        await s3.send(deleteCommand);
+        logger.info("S3 object deleted", { s3Key: file.s3Key });
+      } catch (s3Err: any) {
+        logger.error("Failed to delete S3 object", {
+          s3Key: file.s3Key,
+          error: s3Err,
+        });
+      }
+
+      await PrismaUtil.deleteFileMetadata(file_id);
+
+      logger.info("File deleted successfully", {
+        fileId: file_id,
+        userId: user_id,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "File deleted successfully",
+      });
+    } catch (err) {
+      logger.error("Error deleting file", { err });
+      return res.status(500).json({ success: false, error: "Internal error" });
     }
   }
 }

@@ -12,6 +12,7 @@ type AuthContextType = {
     password: string,
     rememberMe: boolean
   ) => Promise<void>;
+  signout: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -92,9 +93,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const signout = async () => {
+    try {
+      await fetch(`${baseURL}/auth/signout`, {
+        method: "GET",
+        credentials: "include",
+      });
+      setIsAuthenticated(false);
+    } catch (err) {
+      throw new Error("Something has gone wrong");
+    }
+  };
+
   return (
     <AuthContext.Provider
-      value={{ isAuthenticated, isLoading, signup, signin }}
+      value={{ isAuthenticated, isLoading, signup, signin, signout }}
     >
       {children}
     </AuthContext.Provider>

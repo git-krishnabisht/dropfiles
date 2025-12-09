@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import logger from "../utils/logger.util.js";
 
-dotenv.config({path: "../.env"});
+dotenv.config({ path: "../.env" });
 
 const requiredEnvVars = [
   "AWS_ACCESS_KEY_ID",
@@ -11,6 +11,8 @@ const requiredEnvVars = [
   "SQS_QUEUE_URL",
   "PRIVATE_KEY",
   "PUBLIC_KEY",
+  "CLOUD_DB_URI",
+  "CLOUD_RD_URI",
 ];
 
 const missingVars = requiredEnvVars.filter((varName) => !process.env[varName]);

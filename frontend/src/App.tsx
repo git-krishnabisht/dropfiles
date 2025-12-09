@@ -1,5 +1,5 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
-import FileUploadPage from "./pages/FileUploadPage";
+import Dashboard from "./pages/Dashboard";
 import AuthPage from "./pages/AuthPage";
 import ProtectedRoute from "./services/ProtectedRoute";
 
@@ -8,7 +8,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<ProtectedRoute />}>
-          <Route path="/" element={<FileUploadPage />} />
+          <Route path="/" element={<Dashboard />} />
         </Route>
         <Route path="/auth" element={<AuthPage />} />
       </Routes>
